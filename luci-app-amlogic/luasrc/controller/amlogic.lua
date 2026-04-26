@@ -1,5 +1,8 @@
 module("luci.controller.amlogic", package.seeall)
 
+local sys = require "luci.sys"
+local PKG_NAME = "luci-app-amlogic"
+
 function index()
 	if not nixio.fs.access("/etc/config/amlogic") then
 		return
@@ -7,24 +10,25 @@ function index()
 
 	local page = entry({ "admin", "system", "amlogic" }, alias("admin", "system", "amlogic", "info"), _("Amlogic Service"), 88)
 	page.dependent = true
-	page.acl_depends = { "luci-app-amlogic" }
+	page.acl_depends = { PKG_NAME }
 
 	local platfrom = luci.sys.exec("cat /etc/flippy-openwrt-release 2>/dev/null | grep PLATFORM | awk -F'=' '{print $2}' | grep -oE '(amlogic|rockchip|allwinner|qemu)' | xargs") or "Unknown"
 	local install_menu = luci.sys.exec("cat /etc/flippy-openwrt-release 2>/dev/null | grep SHOW_INSTALL_MENU | awk -F'=' '{print $2}' | grep -oE '(yes|no)' | xargs") or "Unknown"
 
-	entry({ "admin", "system", "amlogic", "info" }, cbi("amlogic/amlogic_info"), _("Amlogic Service"), 1).leaf = true
+	entry({ "admin", "system", "amlogic", "info" }, form("amlogic/amlogic_info"), _("Amlogic Service"), 1).leaf = true
 	if (string.find(platfrom, "amlogic")) ~= nil or (string.find(install_menu, "yes")) ~= nil then
-		entry({ "admin", "system", "amlogic", "install" }, cbi("amlogic/amlogic_install"), _("Install OpenWrt"), 2).leaf = true
+		entry({ "admin", "system", "amlogic", "install" }, form("amlogic/amlogic_install"), _("Install OpenWrt"), 2).leaf = true
 	end
-	entry({ "admin", "system", "amlogic", "upload" }, cbi("amlogic/amlogic_upload"), _("Manually Upload Update"), 3).leaf = true
-	entry({ "admin", "system", "amlogic", "check" }, cbi("amlogic/amlogic_check"), _("Online Download Update"), 4).leaf = true
-	entry({ "admin", "system", "amlogic", "backup" }, cbi("amlogic/amlogic_backup"), _("Backup Firmware Config"), 5).leaf = true
+	entry({ "admin", "system", "amlogic", "upload" }, form("amlogic/amlogic_upload"), _("Manually Upload Update"), 3).leaf = true
+	entry({ "admin", "system", "amlogic", "check" }, form("amlogic/amlogic_check"), _("Online Download Update"), 4).leaf = true
+	entry({ "admin", "system", "amlogic", "backup" }, form("amlogic/amlogic_backup"), _("Backup Firmware Config"), 5).leaf = true
+	entry({ "admin", "system", "amlogic", "backuplist" }, form("amlogic/amlogic_backuplist")).leaf = true
 	if (string.find(platfrom, "qemu")) == nil then
 		entry({ "admin", "system", "amlogic", "armcpu" }, cbi("amlogic/amlogic_armcpu"), _("CPU Settings"), 6).leaf = true
 	end
 	entry({ "admin", "system", "amlogic", "config" }, cbi("amlogic/amlogic_config"), _("Plugin Settings"), 7).leaf = true
-	entry({ "admin", "system", "amlogic", "log" }, cbi("amlogic/amlogic_log"), _("Server Logs"), 8).leaf = true
-	entry({ "admin", "system", "amlogic", "poweroff" }, cbi("amlogic/amlogic_poweroff"), _("PowerOff"), 9).leaf = true
+	entry({ "admin", "system", "amlogic", "log" }, form("amlogic/amlogic_log"), _("Server Logs"), 8).leaf = true
+	entry({ "admin", "system", "amlogic", "poweroff" }, form("amlogic/amlogic_poweroff"), _("PowerOff"), 9).leaf = true
 	entry({ "admin", "system", "amlogic", "check_firmware" }, call("action_check_firmware"))
 	entry({ "admin", "system", "amlogic", "check_plugin" }, call("action_check_plugin"))
 	entry({ "admin", "system", "amlogic", "check_kernel" }, call("action_check_kernel"))
@@ -35,11 +39,13 @@ function index()
 	entry({ "admin", "system", "amlogic", "start_check_firmware" }, call("action_start_check_firmware")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_check_plugin" }, call("action_start_check_plugin")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_check_kernel" }, call("action_start_check_kernel")).leaf = true
+	entry({ "admin", "system", "amlogic", "start_check_rescue" }, call("action_start_check_rescue")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_check_upfiles" }, call("action_start_check_upfiles")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_amlogic_install" }, call("action_start_amlogic_install")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_amlogic_update" }, call("action_start_amlogic_update")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_amlogic_kernel" }, call("action_start_amlogic_kernel")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_amlogic_plugin" }, call("action_start_amlogic_plugin")).leaf = true
+	entry({ "admin", "system", "amlogic", "start_amlogic_rescue" }, call("action_start_amlogic_rescue")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_snapshot_delete" }, call("action_start_snapshot_delete")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_snapshot_restore" }, call("action_start_snapshot_restore")).leaf = true
 	entry({ "admin", "system", "amlogic", "start_snapshot_list" }, call("action_check_snapshot")).leaf = true
@@ -128,6 +134,7 @@ function action_refresh_log()
 		luci.sys.exec("echo '' > /tmp/amlogic/amlogic_check_plugin.log && sync >/dev/null 2>&1")
 		luci.sys.exec("echo '' > /tmp/amlogic/amlogic_check_kernel.log && sync >/dev/null 2>&1")
 		luci.sys.exec("echo '' > /tmp/amlogic/amlogic_check_firmware.log && sync >/dev/null 2>&1")
+		luci.sys.exec("echo '' > /tmp/amlogic/amlogic_check_rescue.log && sync >/dev/null 2>&1")
 		luci.sys.exec("echo '' > /tmp/amlogic/amlogic_running_script.log && sync >/dev/null 2>&1")
 	end
 	luci.http.prepare_content("text/plain; charset=utf-8")
@@ -146,19 +153,56 @@ function action_del_log()
 	luci.sys.exec(": > /tmp/amlogic/amlogic_check_plugin.log")
 	luci.sys.exec(": > /tmp/amlogic/amlogic_check_kernel.log")
 	luci.sys.exec(": > /tmp/amlogic/amlogic_check_firmware.log")
+	luci.sys.exec(": > /tmp/amlogic/amlogic_check_rescue.log")
 	luci.sys.exec(": > /tmp/amlogic/amlogic_running_script.log")
 end
 
+
 --Upgrade luci-app-amlogic plugin
 function start_amlogic_plugin()
-	luci.sys.call("echo '1@Plugin update in progress, try again later!' > /tmp/amlogic/amlogic_running_script.log && sync >/dev/null 2>&1")
-	local ipk_state = luci.sys.call("[ -f /etc/config/amlogic ] && cp -vf /etc/config/amlogic /etc/config/amlogic_bak > /tmp/amlogic/amlogic_check_plugin.log && sync >/dev/null 2>&1")
-	local ipk_state = luci.sys.call("opkg --force-reinstall install /tmp/amlogic/*.ipk > /tmp/amlogic/amlogic_check_plugin.log && sync >/dev/null 2>&1")
-	local ipk_state = luci.sys.call("[ -f /etc/config/amlogic_bak ] && cp -vf /etc/config/amlogic_bak /etc/config/amlogic > /tmp/amlogic/amlogic_check_plugin.log && sync >/dev/null 2>&1")
-	local ipk_state = luci.sys.call("rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/* /etc/config/amlogic_bak >/dev/null 2>&1")
-	luci.sys.call("echo '' > /tmp/amlogic/amlogic_running_script.log && sync >/dev/null 2>&1")
-	local state = luci.sys.call("echo 'Successful Update' > /tmp/amlogic/amlogic_check_plugin.log && sync >/dev/null 2>&1")
-	return state
+	local log_file = "/tmp/amlogic/amlogic_check_plugin.log"
+	local running_lock = "/tmp/amlogic/amlogic_running_script.log"
+	local config_file = "/etc/config/amlogic"
+	local config_bak = "/etc/config/amlogic_bak"
+
+	-- 1. Create a running lock and clear previous log
+	luci.sys.call("echo '1@Plugin update in progress, try again later!' > " .. running_lock .. " && > " .. log_file)
+
+	-- 2. Backup config file
+	luci.sys.call(string.format("[ -f %s ] && cp -vf %s %s >> %s 2>&1", config_file, config_file, config_bak, log_file))
+
+	-- 3. Detect and install
+	local install_status = 1
+	if luci.sys.call("command -v opkg >/dev/null") == 0 then
+		luci.sys.call("echo 'System uses opkg. Attempting to install .ipk package...' >> " .. log_file)
+		local install_cmd = string.format("opkg --force-reinstall install /tmp/amlogic/*.ipk >> %s 2>&1", log_file)
+		install_status = luci.sys.call(install_cmd)
+	elseif luci.sys.call("command -v apk >/dev/null") == 0 then
+		luci.sys.call("echo 'System uses apk. Attempting to install .apk package...' >> " .. log_file)
+		local install_cmd = string.format("apk add --force-overwrite --allow-untrusted /tmp/amlogic/*.apk >> %s 2>&1", log_file)
+		install_status = luci.sys.call(install_cmd)
+	else
+		luci.sys.call("echo 'Error: Neither opkg nor apk found. Aborting.' >> " .. log_file)
+	end
+
+	-- 4. Check result and finalize
+	if install_status == 0 then
+		-- SUCCESS
+		luci.sys.call("echo 'Installation successful. Finalizing...' >> " .. log_file)
+		luci.sys.call(string.format("[ -f %s ] && cp -vf %s %s >> %s 2>&1", config_bak, config_bak, config_file, log_file))
+		luci.sys.call("rm -rf /tmp/luci-indexcache /tmp/luci-modulecache/* " .. config_bak)
+		luci.sys.call("echo '' > " .. running_lock)
+		luci.sys.call("echo 'Successful Update' > " .. log_file)
+		return 0
+	else
+		-- FAILURE
+		luci.sys.call("echo '--- INSTALLATION FAILED! ---' >> " .. log_file)
+		luci.sys.call("echo 'Restoring configuration and aborting.' >> " .. log_file)
+		luci.sys.call(string.format("[ -f %s ] && cp -vf %s %s >> %s 2>&1", config_bak, config_bak, config_file, log_file))
+		luci.sys.call("rm -f " .. config_bak)
+		luci.sys.call("echo '' > " .. running_lock)
+		return install_status
+	end
 end
 
 --Upgrade the kernel
@@ -180,6 +224,15 @@ function start_amlogic_update()
 	local update_write_path = res[3] or "/tmp"
 	luci.sys.call("echo " .. update_firmware_updated .. " > " .. update_write_path .. "/.luci-app-amlogic/op_release_code 2>/dev/null && sync")
 	local state = luci.sys.call("/usr/sbin/" .. device_update_script .. " " .. update_firmware_name .. " " .. auto_write_bootloader .. " " .. update_restore_config .. " > /tmp/amlogic/amlogic_check_firmware.log && sync 2>/dev/null")
+	return state
+end
+
+--Read rescue kernel log
+local function start_amlogic_rescue()
+	luci.sys.call("echo '4@Kernel rescue in progress, try again later!' > /tmp/amlogic/amlogic_running_script.log && sync >/dev/null 2>&1")
+	luci.sys.call("chmod +x /usr/sbin/" .. device_kernel_script .. " >/dev/null 2>&1")
+	local state = luci.sys.call("/usr/sbin/" .. device_kernel_script .. " -s > /tmp/amlogic/amlogic_check_rescue.log && sync >/dev/null 2>&1")
+	luci.sys.call("echo '' > /tmp/amlogic/amlogic_running_script.log && sync >/dev/null 2>&1")
 	return state
 end
 
@@ -279,6 +332,11 @@ local function start_check_firmware()
 	return luci.sys.exec("sed -n '$p' /tmp/amlogic/amlogic_check_firmware.log 2>/dev/null")
 end
 
+--Read rescue kernel log
+local function start_check_rescue()
+	return luci.sys.exec("sed -n '$p' /tmp/amlogic/amlogic_check_rescue.log 2>/dev/null")
+end
+
 --Read openwrt install log
 local function start_check_install()
 	return luci.sys.exec("sed -n '$p' /tmp/amlogic/amlogic_check_install.log 2>/dev/null")
@@ -305,6 +363,14 @@ function action_start_check_firmware()
 	luci.http.prepare_content("application/json")
 	luci.http.write_json({
 		start_check_firmware = start_check_firmware();
+	})
+end
+
+--Return online check rescue kernel result
+function action_start_check_rescue()
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({
+		start_check_rescue = start_check_rescue();
 	})
 end
 
@@ -364,6 +430,14 @@ function action_start_amlogic_plugin()
 	})
 end
 
+--Return rescue kernel result
+function action_start_amlogic_rescue()
+	luci.http.prepare_content("application/json")
+	luci.http.write_json({
+		start_amlogic_rescue = start_amlogic_rescue();
+	})
+end
+
 --Return files upload result
 function action_start_check_upfiles()
 	luci.http.prepare_content("application/json")
@@ -374,22 +448,40 @@ end
 
 --Return the current openwrt firmware version
 local function current_firmware_version()
-	return luci.sys.exec("ls /lib/modules/ 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}.[0-9]+'") or "Invalid value."
+	return luci.sys.exec("uname -r 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}.[0-9]+'") or "Invalid value."
 end
 
 --Return the current plugin version
 local function current_plugin_version()
-	return luci.sys.exec("opkg list-installed | grep 'luci-app-amlogic' | awk '{print $3}'") or "Invalid value."
+    local version_str = ""
+
+    -- Check if opkg command exists
+    if sys.call("command -v opkg >/dev/null") == 0 then
+        local opkg_cmd = string.format("opkg list-installed | grep '^%s' | awk '{print $3}' | cut -d'-' -f1", PKG_NAME)
+        version_str = trim(sys.exec(opkg_cmd))
+    end
+
+    -- If opkg failed or not found, check if apk command exists
+    if version_str == "" and sys.call("command -v apk >/dev/null") == 0 then
+        local apk_cmd = string.format("apk list --installed 2>/dev/null | grep '^%s' | awk '{print $1}' | cut -d'-' -f4", PKG_NAME)
+        version_str = trim(sys.exec(apk_cmd))
+    end
+
+    if version_str ~= "" then
+        return version_str
+    else
+        return "Invalid value."
+    end
 end
 
 --Return the current kernel version
 local function current_kernel_version()
-	return luci.sys.exec("ls /lib/modules/ 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}.[0-9]+'") or "Invalid value."
+	return luci.sys.exec("uname -r 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}.[0-9]+'") or "Invalid value."
 end
 
 --Return the current kernel branch
 local function current_kernel_branch()
-	local default_kernel_branch = luci.sys.exec("ls /lib/modules/ 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}'")
+	local default_kernel_branch = luci.sys.exec("uname -r 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}'")
 	local amlogic_kernel_branch = luci.sys.exec("uci get amlogic.config.amlogic_kernel_branch 2>/dev/null | grep -oE '^[1-9].[0-9]{1,3}'") or ""
 	if trim(amlogic_kernel_branch) == "" then
 		return default_kernel_branch

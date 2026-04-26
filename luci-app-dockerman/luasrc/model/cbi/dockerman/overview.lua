@@ -103,11 +103,14 @@ s.volumes_total = '-'
 
 -- local socket = luci.model.uci.cursor():get("dockerd", "dockerman", "socket_path")
 if not lost_state then
-	local containers_list = dk.containers:list({query = {all=true}}).body
-	local images_list = dk.images:list().body
+	local containers_res = dk.containers:list({query = {all=true}})
+	local containers_list = containers_res and containers_res.body or {}
+	local images_res = dk.images:list()
+	local images_list = images_res and images_res.body or {}
 	local vol = dk.volumes:list()
 	local volumes_list = vol and vol.body and vol.body.Volumes or {}
-	local networks_list = dk.networks:list().body or {}
+	local networks_res = dk.networks:list()
+	local networks_list = networks_res and networks_res.body or {}
 	local docker_info = dk:info()
 
 	-- docker_info_table['0OperatingSystem']._value = docker_info.body.OperatingSystem
@@ -124,8 +127,10 @@ if not lost_state then
 	end
 
 	docker_info_table['8IndexServerAddress']._value = docker_info.body.IndexServerAddress
-	for i, v in ipairs(docker_info.body.RegistryConfig.Mirrors) do
-		docker_info_table['9RegistryMirrors']._value = docker_info_table['9RegistryMirrors']._value == "-" and v or (docker_info_table['9RegistryMirrors']._value .. ", " .. v)
+	if docker_info.body.RegistryConfig and docker_info.body.RegistryConfig.Mirrors then
+		for i, v in ipairs(docker_info.body.RegistryConfig.Mirrors) do
+			docker_info_table['9RegistryMirrors']._value = docker_info_table['9RegistryMirrors']._value == "-" and v or (docker_info_table['9RegistryMirrors']._value .. ", " .. v)
+		end
 	end
 
 	s.images_used = 0

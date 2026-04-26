@@ -1,5 +1,5 @@
 # 
-# Copyright (C) 2018-2023 Ruilin Peng (Nick) <pymumu@gmail.com>.
+# Copyright (C) 2018-2024 Ruilin Peng (Nick) <pymumu@gmail.com>.
 #
 # smartdns is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -16,9 +16,10 @@
 
 include $(TOPDIR)/rules.mk
 
+PKG_NAME:=luci-app-smartdns
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_MAINTAINER:=Nick Peng <pymumu@gmail.com>
-PKG_VERSION:=1.2023.41
+PKG_VERSION:=1.2024.45
 PKG_RELEASE:=1
 
 LUCI_TITLE:=LuCI for smartdns
@@ -36,3 +37,4 @@ endef
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature
+$(eval $(call BuildPackage,$(PKG_NAME)))

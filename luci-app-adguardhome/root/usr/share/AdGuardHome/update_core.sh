@@ -1,217 +1,271 @@
-#!/bin/bash
+#!/bin/sh
 
 PATH="/usr/sbin:/usr/bin:/sbin:/bin"
-update_mode=$1
-binpath=$(uci get AdGuardHome.AdGuardHome.binpath)
-if [[ -z ${binpath} ]]; then
+
+binpath="$(uci get AdGuardHome.AdGuardHome.binpath 2>/dev/null)"
+if [ -z "$binpath" ]; then
 	uci set AdGuardHome.AdGuardHome.binpath="/tmp/AdGuardHome/AdGuardHome"
 	binpath="/tmp/AdGuardHome/AdGuardHome"
 fi
-[[ ! -d ${binpath%/*} ]] && mkdir -p ${binpath%/*}
-upxflag=$(uci get AdGuardHome.AdGuardHome.upxflag 2>/dev/null)
-[[ -z ${upxflag} ]] && upxflag=off
-enabled=$(uci get AdGuardHome.AdGuardHome.enabled 2>/dev/null)
-core_version=$(uci get AdGuardHome.AdGuardHome.core_version 2>/dev/null)
-update_url=$(uci get AdGuardHome.AdGuardHome.update_url 2>/dev/null)
 
-case "${core_version}" in
-beta)
-	core_api_url=https://api.github.com/repos/AdguardTeam/AdGuardHome/releases
-;;
-*)
-	core_api_url=https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest
-;;
-esac
+mkdir -p "${binpath%/*}"
 
-Check_Task(){
-	running_tasks="$(ps -efww  | grep -v grep | grep "AdGuardHome" | grep "update_core" | awk '{print $1}' | wc -l)"
-	case $1 in
-	force)
-		echo -e "执行: 强制更新核心"
-		echo -e "清除 ${running_tasks} 个进程 ..."
-		ps -efww  | grep -v grep | grep -v $$ | grep "AdGuardHome" | grep "update_core" | awk '{print $1}' | xargs kill -9 2> /dev/null
-	;;
-	*)
-		[[ ${running_tasks} -gt 2 ]] && echo -e "已经有 ${running_tasks} 个任务正在运行, 请等待其执行结束或将其强行停止!" && EXIT 2
-	;;
-	esac
+upxflag="$(uci get AdGuardHome.AdGuardHome.upxflag 2>/dev/null)"
+
+cleanup() {
+	rm -f /var/run/update_core 2>/dev/null
+	[ "$1" != "0" ] && touch /var/run/update_core_error
+	exit "$1"
 }
 
-Check_Downloader(){
-	which curl > /dev/null 2>&1 && PKG="curl" && return
-	echo -e "\n未安装 curl"
-	which wget-ssl > /dev/null 2>&1 && PKG="wget-ssl" && return
-	echo "未安装 curl 和 wget, 无法检测更新!" && EXIT 1
+check_already_running(){
+	local running_tasks
+	running_tasks="$(ps | grep -E "AdGuardHome|update_core" | grep -v grep | wc -l)"
+	[ "${running_tasks}" -gt "2" ] && echo "A task is already running." && cleanup 2
 }
 
-Check_Updates(){
-	Check_Downloader
-	case "${PKG}" in
-	curl)
-		Downloader="curl -L -k -o"
-		_Downloader="curl -s"
-	;;
-	wget-ssl)
-		Downloader="wget-ssl --no-check-certificate -T 5 -O"
-		_Downloader="wget-ssl -q -O -"
-	;;
-	esac
-	echo "[${PKG}] 开始检查更新, 请耐心等待 ..."
-	Cloud_Version="$(${_Downloader} ${core_api_url} 2>/dev/null | grep 'tag_name' | egrep -o "v[0-9].+[0-9.]" | awk 'NR==1')"
-	[[ -z ${Cloud_Version} ]] && echo -e "\n检查更新失败, 请检查网络或稍后重试!" && EXIT 1
-	if [[ -f ${binpath} ]]; then
-		Current_Version="$(${binpath} --version 2>/dev/null | egrep -o "v[0-9].+[0-9]" | sed -r 's/(.*), c(.*)/\1/')"
-	else
-		Current_Version="未知"
+check_wgetcurl(){
+	if which curl >/dev/null 2>&1; then
+		downloader="curl -L -k --retry 2 --connect-timeout 20 -o"
+		return 0
 	fi
-	[[ -z ${Current_Version} ]] && Current_Version="未知"
-	echo -e "\n执行文件路径: ${binpath%/*}\n\n正在检查更新, 请耐心等待 ..."
-	echo -e "\n当前 AdGuardHome 版本: ${Current_Version}\n云端 AdGuardHome 版本: ${Cloud_Version}"
-	if [[ ! "${Cloud_Version}" == "${Current_Version}" || "$1" == force ]]; then
-		Update_Core
-	else
-		echo -e "\n已是最新版本, 无需更新!" 
-		EXIT 0
+	if which wget-ssl >/dev/null 2>&1; then
+		downloader="wget-ssl --no-check-certificate -t 2 -T 20 -O"
+		return 0
 	fi
-	EXIT 0
+
+	if [ -z "$1" ]; then
+		opkg update >/dev/null 2>&1 || { echo "Error: opkg failed"; cleanup 1; }
+	fi
+
+	if [ -z "$1" ]; then
+		opkg remove wget wget-nossl --force-depends >/dev/null 2>&1
+		opkg install wget >/dev/null 2>&1 && check_wgetcurl 1 && return 0
+	fi
+
+	if [ "$1" = "1" ]; then
+		opkg install curl >/dev/null 2>&1 && check_wgetcurl 2 && return 0
+	fi
+
+	if [ "$1" = "2" ]; then
+		check_wgetcurl && return 0
+	fi
+
+	echo "Error: neither curl nor wget available"
+	cleanup 1
 }
 
-UPX_Compress(){
-	GET_Arch
-	upx_name="upx-${upx_latest_ver}-${Arch_upx}_linux.tar.xz"
-	echo -e "开始下载 ${upx_name} ...\n"
-	$Downloader /tmp/upx-${upx_latest_ver}-${Arch_upx}_linux.tar.xz "https://github.com/upx/upx/releases/download/v${upx_latest_ver}/${upx_name}"
-	if [[ ! -e /tmp/upx-${upx_latest_ver}-${Arch_upx}_linux.tar.xz ]]; then
-		echo -e "\n${upx_name} 下载失败!\n" 
-		EXIT 1
-	else
-		echo -e "\n${upx_name} 下载成功!\n" 
-	fi
-	which xz > /dev/null 2>&1 || (opkg list | grep ^xz || opkg update > /dev/null 2>&1 && opkg install xz --force-depends) || (echo "软件包 xz 安装失败!" && EXIT 1)
-	mkdir -p /tmp/upx-${upx_latest_ver}-${Arch_upx}_linux
-	echo -e "正在解压 ${upx_name} ...\n" 
-	xz -d -c /tmp/upx-${upx_latest_ver}-${Arch_upx}_linux.tar.xz | tar -x -C "/tmp"
-	[[ ! -f /tmp/upx-${upx_latest_ver}-${Arch_upx}_linux/upx ]] && echo -e "\n${upx_name} 解压失败!" && EXIT 1
-}
+detect_arch(){
+	local Archt
+	Archt="$(opkg info kernel 2>/dev/null | grep Architecture | awk '{print $2}')"
 
-Update_Core(){
-	rm -r /tmp/AdGuardHome_Update > /dev/null 2>&1
-	mkdir -p "/tmp/AdGuardHome_Update"
-	GET_Arch
-	eval link="${update_url}"
-	echo -e "下载链接:${link}"
-	echo -e "文件名称:${link##*/}"
-	echo -e "\n开始下载 AdGuardHome 核心文件 ...\n" 
-	$Downloader /tmp/AdGuardHome_Update/${link##*/} ${link}
-	if [[ $? != 0 ]];then
-		echo -e "\nAdGuardHome 核心下载失败 ..."
-		rm -r /tmp/AdGuardHome_Update
-		EXIT 1
-	fi 
-	if [[ ${link##*.} == gz ]]; then
-		echo -e "\n正在解压 AdGuardHome ..."
-		tar -zxf "/tmp/AdGuardHome_Update/${link##*/}" -C "/tmp/AdGuardHome_Update/"
-		if [[ ! -e /tmp/AdGuardHome_Update/AdGuardHome ]]
-		then
-			echo "AdGuardHome 核心解压失败!" 
-			rm -rf "/tmp/AdGuardHome_Update" > /dev/null 2>&1
-			EXIT 1
-		fi
-		downloadbin="/tmp/AdGuardHome_Update/AdGuardHome/AdGuardHome"
-	else
-		downloadbin="/tmp/AdGuardHome_Update/${link##*/}"
-	fi
-	chmod +x ${downloadbin}
-	echo -e "\nAdGuardHome 核心体积: $(awk 'BEGIN{printf "%.2fMB\n",'$((`ls -l $downloadbin | awk '{print $5}'`))'/1000000}')"
-	if [[ ${upxflag} != off ]]; then
-		UPX_Compress
-		echo -e "使用 UPX 压缩可能会花很长时间, 期间请耐心等待!\n正在压缩 $downloadbin ..."
-		/tmp/upx-${upx_latest_ver}-${Arch_upx}_linux/upx $upxflag $downloadbin > /dev/null 2>&1
-		echo -e "\n压缩后的核心体积: $(awk 'BEGIN{printf "%.2fMB\n",'$((`ls -l $downloadbin | awk '{print $5}'`))'/1000000}')"
-	else
-		echo "未启用 UPX 压缩, 跳过操作..."
-	fi
-	/etc/init.d/AdGuardHome stop > /dev/null 2>&1
-	echo -e "\n移动 AdGuardHome 核心文件到 ${binpath%/*} ..."
-	mv -f ${downloadbin} ${binpath} > /dev/null 2>&1
-	if [[ ! -s ${binpath} && $? != 0 ]]; then
-		echo -e "AdGuardHome 核心移动失败!\n可能是设备空间不足导致, 请尝试开启 UPX 压缩, 或更改 [执行文件路径] 为 /tmp/AdGuardHome" 
-		EXIT 1
-	fi
-	rm -f /tmp/upx*.tar.xz
-	rm -rf /tmp/upx*	
-	rm -rf /tmp/AdGuardHome_Update
-	chmod +x ${binpath}
-	if [[ ${enabled} == 1 ]]; then
-		echo -e "\n正在重启 AdGuardHome 服务..."
-		/etc/init.d/AdGuardHome restart
-	fi
-	echo -e "\nAdGuardHome 核心更新成功!" 
-}
-
-GET_Arch() {
-	Archt="$(opkg info kernel | grep Architecture | awk -F "[ _]" '{print($2)}')"
-	case "${Archt}" in
-	i386)
-		Arch=i386
-	;;
-	i686)
-		Arch=i386
-	;;
+	case "$Archt" in
+	i386|i686)
+		Arch="386"
+		;;
 	x86)
-		Arch=amd64
-	;;
+		Arch="amd64"
+		;;
 	mipsel)
-		Arch=mipsle_softfloat
-	;;
-	mips)
-		Arch=mips_softfloat
-	;;
+		Arch="mipsle"
+		;;
 	mips64el)
-		Arch=mips64le_softfloat
-	;;
+		Arch="mips64le"
+		;;
+	mips)
+		Arch="mips"
+		;;
 	mips64)
-		Arch=mips64_softfloat
-	;;
+		Arch="mips64"
+		;;
 	arm)
-		Arch=arm
-	;;
+		Arch="arm"
+		;;
 	armeb)
-		Arch=armeb
-	;;
+		Arch="armeb"
+		;;
 	aarch64)
-		Arch=arm64
-	;;
+		Arch="arm64"
+		;;
 	*)
-		echo -e "\nAdGuardHome 暂不支持当前的设备架构: [${Archt}]!" 
-		EXIT 1
+		echo "Error: unsupported architecture: $Archt"
+		cleanup 1
+		;;
 	esac
-	case "${Archt}" in
-	mipsel)
-		Arch_upx="mipsel"
-		upx_latest_ver="3.95"
-	;;
+}
+
+check_latest_version(){
+	check_wgetcurl
+	echo "Checking latest version..."
+
+	local api_result
+	api_result="$($downloader - "https://api.github.com/repos/AdguardTeam/AdGuardHome/releases/latest" 2>/dev/null)"
+	latest_ver="$(echo "$api_result" | grep -oE '"tag_name": *"v[^"]+"' | head -1 | sed 's/.*"v\(.*\)".*/v\1/')"
+
+	if [ -z "${latest_ver}" ]; then
+		echo "Failed to check latest version, please try again later."
+		cleanup 1
+	fi
+
+	if [ -x "$binpath" ]; then
+		now_ver="$($binpath -c /dev/null --check-config 2>&1 | grep -oE 'v[0-9.]+' | head -1)"
+	else
+		now_ver=""
+	fi
+
+	echo "Local version: ${now_ver:-none}, cloud version: ${latest_ver}"
+
+	if [ "${latest_ver}" != "${now_ver}" ] || [ "$1" = "force" ]; then
+		update_core
+	else
+		echo "You're already using the latest version."
+		apply_upx
+		cleanup 0
+	fi
+}
+
+apply_upx(){
+	[ -z "$upxflag" ] && return
+
+	local filesize
+	filesize="$(ls -l "$binpath" 2>/dev/null | awk '{print $5}')"
+	[ "$filesize" -le 8000000 ] && return
+
+	echo "Binary size > 8MB, applying upx compression..."
+	fetch_upx
+
+	local UPX_BIN="/tmp/upx-${upx_latest_ver}-${Arch}_linux/upx"
+	[ ! -x "$UPX_BIN" ] && { echo "upx binary not found"; return; }
+
+	mkdir -p "/tmp/AdGuardHomeupdate"
+	rm -rf "/tmp/AdGuardHomeupdate/${binpath##*/}" 2>/dev/null
+
+	$UPX_BIN $upxflag "$binpath" -o "/tmp/AdGuardHomeupdate/${binpath##*/}"
+	local upxret=$?
+	rm -rf "/tmp/upx-${upx_latest_ver}-${Arch}_linux"
+
+	if [ $upxret -eq 0 ]; then
+		/etc/init.d/AdGuardHome stop nobackup 2>/dev/null
+		rm -f "$binpath"
+		mv -f "/tmp/AdGuardHomeupdate/${binpath##*/}" "$binpath"
+		chmod 755 "$binpath"
+		/etc/init.d/AdGuardHome start 2>/dev/null
+		echo "upx compression finished"
+	fi
+}
+
+fetch_upx(){
+	local Archt_upx
+	Archt_upx="$(opkg info kernel 2>/dev/null | grep Architecture | awk '{print $2}')"
+
+	case "$Archt_upx" in
+	i386|i686)  Arch="i386";;
+	x86)        Arch="amd64";;
+	mipsel)     Arch="mipsel";;
+	mips64el)   Arch="mipsel";;
+	mips)       Arch="mips";;
+	mips64)     Arch="mips";;
+	arm)        Arch="arm";;
+	aarch64)    Arch="arm64";;
 	*)
-		Arch_upx="${Arch}"
-		upx_latest_ver="$(${_Downloader} https://api.github.com/repos/upx/upx/releases/latest 2>/dev/null | egrep 'tag_name' | egrep '[0-9.]+' -o 2>/dev/null)"
-	
+		echo "upx: unsupported arch $Archt_upx"
+		return 1
+		;;
 	esac
-	echo -e "\n当前设备架构: ${Arch}\n"
+
+	upx_latest_ver="$($downloader - "https://api.github.com/repos/upx/upx/releases/latest" 2>/dev/null | grep -oE '"tag_name": *"[^"]+"' | head -1 | sed 's/.*"\(.*\)"/\1/')"
+
+	if [ -z "$upx_latest_ver" ]; then
+		echo "Failed to get upx version"
+		return 1
+	fi
+
+	local UPX_URL="https://github.com/upx/upx/releases/download/${upx_latest_ver}/upx-${upx_latest_ver}-${Arch}_linux.tar.xz"
+	$downloader "/tmp/upx-${upx_latest_ver}-${Arch}_linux.tar.xz" "$UPX_URL" 2>&1
+	[ $? -ne 0 ] && { echo "Failed to download upx"; return 1; }
+
+	which xz >/dev/null 2>&1 || opkg install xz >/dev/null 2>&1 || { echo "xz not available"; return 1; }
+
+	mkdir -p "/tmp/upx-${upx_latest_ver}-${Arch}_linux"
+	xz -d -c "/tmp/upx-${upx_latest_ver}-${Arch}_linux.tar.xz" | tar -x -C "/tmp" >/dev/null 2>&1
+
+	[ ! -x "/tmp/upx-${upx_latest_ver}-${Arch}_linux/upx" ] && { echo "upx extraction failed"; return 1; }
+	rm -f "/tmp/upx-${upx_latest_ver}-${Arch}_linux.tar.xz"
 }
 
-EXIT(){
-	rm -rf /var/run/update_core 2>/dev/null
-	[[ $1 != 0 ]] && touch /var/run/update_core_error
-	exit $1
+update_core(){
+	echo "Updating AdGuardHome core..."
+	mkdir -p "/tmp/AdGuardHomeupdate"
+	rm -rf "/tmp/AdGuardHomeupdate/*" 2>/dev/null
+
+	detect_arch
+	echo "Architecture: $Arch"
+
+	echo "Fetching download links..."
+	mkdir -p /tmp/run
+	grep -v "^#" /usr/share/AdGuardHome/links.txt > /tmp/run/AdHlinks.txt
+
+	local downloadbin=""
+	local success=""
+
+	while read link; do
+		[ -z "$link" ] && continue
+		eval link="$link"
+		echo "Trying: $link"
+		$downloader "/tmp/AdGuardHomeupdate/${link##*/}" "$link" 2>&1
+		if [ $? -eq 0 ] && [ -s "/tmp/AdGuardHomeupdate/${link##*/}" ]; then
+			downloadbin="/tmp/AdGuardHomeupdate/${link##*/}"
+			success="1"
+			echo "Download successful"
+			break
+		else
+			echo "Download failed, trying next..."
+			rm -f "/tmp/AdGuardHomeupdate/${link##*/}"
+		fi
+	done < /tmp/run/AdHlinks.txt
+
+	rm -f /tmp/run/AdHlinks.txt
+
+	if [ -z "$success" ]; then
+		echo "Error: all download sources failed"
+		cleanup 1
+	fi
+
+	if [ "${downloadbin##*.}" = "gz" ]; then
+		tar -zxf "$downloadbin" -C "/tmp/AdGuardHomeupdate/" 2>/dev/null
+		if [ -d "/tmp/AdGuardHomeupdate/AdGuardHome" ]; then
+			downloadbin="/tmp/AdGuardHomeupdate/AdGuardHome/AdGuardHome"
+		else
+			echo "Error: failed to extract archive"
+			cleanup 1
+		fi
+	fi
+
+	chmod 755 "$downloadbin"
+	echo "Download complete, applying upx if configured..."
+	apply_upx
+
+	echo "Stopping service..."
+	/etc/init.d/AdGuardHome stop nobackup 2>/dev/null
+
+	echo "Installing new binary..."
+	rm -f "$binpath" 2>/dev/null
+	mv -f "$downloadbin" "$binpath" 2>/dev/null
+	[ $? -ne 0 ] && { echo "mv failed - disk space issue?"; cleanup 1; }
+	chmod 755 "$binpath"
+
+	rm -rf "/tmp/AdGuardHomeupdate" 2>/dev/null
+
+	echo "Starting service..."
+	/etc/init.d/AdGuardHome start 2>/dev/null
+
+	echo "Succeeded in updating AdGuardHome to ${latest_ver}."
+	cleanup 0
 }
 
-main(){
-	Check_Task ${update_mode}
-	Check_Updates ${update_mode}
-}
-
-trap "EXIT 1" SIGTERM SIGINT
+trap "cleanup 1" SIGTERM SIGINT
 touch /var/run/update_core
-rm - rf /var/run/update_core_error 2>/dev/null
+rm -f /var/run/update_core_error 2>/dev/null
 
-main
+check_already_running
+check_latest_version "$1"
